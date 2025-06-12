@@ -1,0 +1,118 @@
+# Windows Runner Scale Set Configuration for Actions Runner Controller (ARC)
+# This configuration deploys Windows runners on AKS Windows node pool
+
+## githubConfigUrl is the GitHub url for where you want to configure runners
+## ex: https://github.com/myorg/myrepo or https://github.com/myorg
+githubConfigUrl: "https://github.com/ms-mfg-community"
+
+## githubConfigSecret is the k8s secret information to use when authenticating via the GitHub API.
+## You can choose to supply:
+##   A) a PAT token,
+##   B) a GitHub App, or
+##   C) a pre-defined Kubernetes secret.
+## The syntax for each of these variations is documented below.
+## (Variation A) When using a PAT token, the syntax is as follows:
+# githubConfigSecret:
+#   # Example:
+#   # github_token: "ghp_sampleSampleSampleSampleSampleSample"
+#   github_token: ""
+#
+## (Variation B) When using a GitHub App, the syntax is as follows:
+# githubConfigSecret:
+#   # NOTE: IDs MUST be strings, use quotes
+#   # The github_app_id can be an app_id or the client_id
+#   github_app_id: ""
+#   github_app_installation_id: ""
+#   github_app_private_key: |
+#      private key line 1
+#      private key line 2
+#      .
+#      .
+#      .
+#      private key line N
+#
+## (Variation C) When using a pre-defined Kubernetes secret in the same namespace that the gha-runner-scale-set is going to deploy,
+## the syntax is as follows:
+githubConfigSecret: arc-win-secret
+
+## maxRunners is the max number of runners the autoscaling runner set will scale up to.
+maxRunners: 10
+
+## minRunners is the min number of idle runners. The target number of runners created will be
+## calculated as a sum of minRunners and the number of jobs assigned to the scale set.
+minRunners: 1
+
+runnerGroup: "runner-scale-set-win"
+
+## Container mode is an object that provides out-of-box configuration
+## for dind and kubernetes mode. Template will be modified as documented under the
+## template object.
+##
+## For Windows runners, we need to use explicit configuration instead of containerMode
+## because Windows containers have different requirements than Linux containers
+# containerMode:
+#   type: "dind"  ## Windows runners require special Docker handling
+#   dockerdWithinRunnerContainer: true  ## Required for Windows runners
+
+## listenerTemplate is the PodSpec for each listener Pod
+## For reference: https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#PodSpec
+listenerTemplate:
+  spec:
+    nodeSelector:
+      kubernetes.io/os: linux
+    containers:
+    - name: listener
+
+## template is the PodSpec for each runner Pod
+## For reference: https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#PodSpec
+template:
+  spec:
+    imagePullSecrets:
+      - name: acr-secret
+
+    nodeSelector:
+      kubernetes.io/os: windows
+      agentpool: npwin
+
+    containers:      
+      - name: runner
+        image: gharcacr1.azurecr.io/gha-runner-windows-wdk:latest
+        imagePullPolicy: Always
+        # Windows runner command - using cmd.exe to start the runner
+        command: ["cmd.exe", "/c", "C:\\actions-runner\\run.cmd"]
+        env:
+          # Required environment variables for Windows runners
+          - name: RUNNER_MANUALLY_TRAP_SIG
+            value: "1"
+          - name: ACTIONS_RUNNER_PRINT_LOG_TO_STDOUT
+            value: "1"
+          # Docker configuration for Windows containers
+          - name: DOCKER_HOST
+            value: "npipe:////./pipe/docker_engine"
+        volumeMounts:
+          - name: work
+            mountPath: C:\actions-runner\_work
+        resources:
+          limits:
+            cpu: 1500m
+            memory: 4Gi
+          requests:
+            cpu: 500m
+            memory: 2Gi
+        securityContext:
+          # Windows containers run as ContainerUser by default
+          windowsOptions:
+            runAsUserName: "ContainerUser"
+    volumes:
+      - name: work
+        emptyDir: {}
+
+## Optional controller service account that needs to have required Role and RoleBinding
+## to operate this gha-runner-scale-set installation.
+## The helm chart will try to find the controller deployment and its service account at installation time.
+## In case the helm chart can't find the right service account, you can explicitly pass in the following value
+## to help it finish RoleBinding with the right service account.
+## Note: if your controller is installed to only watch a single namespace, you have to pass these values explicitly.
+controllerServiceAccount:
+  namespace: arc-systems-win
+  name: arc-gha-rs-controller
